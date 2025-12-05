@@ -2,6 +2,41 @@
 import time
 from pymavlink import mavutil
 
+class PID:
+    def __init__(self, kp, ki, kd, out_min=None, out_max=None):
+        self.kp = kp
+        self.ki = ki
+        self.kd = kd
+        self.out_min = out_min
+        self.out_max = out_max
+        self.integral = 0.0
+        self.prev_error = 0.0
+        self.has_prev = False
+
+    def reset(self):
+        self.integral = 0.0
+        self.prev_error = 0.0
+        self.has_prev = False
+
+    def update(self, error, dt):
+        if dt <= 0:
+            d = 0.0
+        else:
+            d = (error - self.prev_error) / dt if self.has_prev else 0.0
+
+        self.integral += error * dt
+        u = self.kp * error + self.ki * self.integral + self.kd * d
+
+        # giới hạn output nếu cần
+        if self.out_min is not None:
+            u = max(self.out_min, u)
+        if self.out_max is not None:
+            u = min(self.out_max, u)
+
+        self.prev_error = error
+        self.has_prev = True
+        return u
+
 def set_mode_guided(m,f):
     modes = m.mode_mapping()
     if "GUIDED" not in modes:
@@ -48,7 +83,7 @@ def arm(m,f):
     f.write("Arm timeout\n")
     return False
 
-def takeoff(m, alt,f):
+def takeoff(m, f, alt):
     f.write(f"Takeoff to {alt} m...")
     m.mav.command_long_send(
         m.target_system, m.target_component,
@@ -91,3 +126,5 @@ def send_body_velocity(m, vx, vy, vz):
         0,0,0,
         0,0
     )
+
+def tracking(dx,dy.dz):

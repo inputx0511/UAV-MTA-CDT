@@ -1,117 +1,77 @@
-import os
 import cv2
-import numpy as np
 from ultralytics import YOLO
+import time
 
+model = YOLO("best.pt")
+cap = cv2.VideoCapture(0)
+cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+cap.set(cv2.CAP_PROP_FPS, 30)
+video_name = time.strftime("videos/%Y_%m_%d_%H_%M.mp4")
+out = cv2.VideoWriter(video_name,cv2.VideoWriter_fourcc(*"mp4v"),20.0,(640, 360))
 
-def centers(model_path="best.pt", cam_id=0, show=True, stop_event=None):
-    base_dir = os.path.dirname(__file__)
-    model_path = os.path.join(base_dir, model_path)
+def detect():
+    dx = dy = None
+    best_conf = None
+    obj_cx = obj_cy = None
+    bbox = None
+    ret, frame_ = cap.read()
+    if not ret:
+        return 0,0
+    frame = cv2.resize(frame_, (640, 360), interpolation=cv2.INTER_LINEAR)
+    cam_cx, cam_cy = 320.0, 180.0  
 
-    model = YOLO(model_path)
-    cap = cv2.VideoCapture(cam_id)
+    r = model.predict(frame, conf=0.5, imgsz=320, device="cuda", half=True, verbose=False)[0]
+    b = r.boxes
+    if b is not None and len(b) > 0:
+        best_conf = float(b.conf[0].item())
+        x1, y1, x2, y2 = b.xyxy[0].tolist()
+        bbox = (x1, y1, x2, y2)
 
-    if not cap.isOpened():
-        raise RuntimeError("Không mở được camera")
+        obj_cx = (x1 + x2) / 2.0 #tâm object
+        obj_cy = (y1 + y2) / 2.0 #tâm object
+        dx = obj_cx - cam_cx #độ lệch theo phương X
+        dy = cam_cy - obj_cy #độ lệch theo phương Y
+    #Tính fps
+    if not hasattr(detect, "prev_t"):
+        detect.prev_t = time.time()
+        detect.fps_now = 0.0
 
-    BOX_COLOR = (200, 0, 0)
-    CENTER_COLOR = (0, 0, 255)
-    CAM_CENTER_COLOR = (0, 255, 255)
-    LINE_COLOR = (0, 255, 0)
+    now_t = time.time()
+    dt = now_t - detect.prev_t   # dùng lại giá trị cũ
+    detect.prev_t = now_t        # cập nhật cho lần sau
+    detect.fps_now = 1.0 / dt if dt > 0 else 0.0
+    
+    #Vẽ chú thích lên khung ảnh
+    annotated = frame
+    cv2.drawMarker(annotated, (int(cam_cx), int(cam_cy)), (0, 255, 255), markerType=cv2.MARKER_CROSS, markerSize=20, thickness=2) # tâm camera (vàng)
+    cv2.putText(annotated, f"FPS:{detect.fps_now:.1f}",(10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255),2) #in fps
 
-    kf = cv2.KalmanFilter(4, 2)
+    if bbox is not None:
+        x1, y1, x2, y2 = bbox
 
-    kf.measurementMatrix = np.array([
-        [1, 0, 0, 0],
-        [0, 1, 0, 0]
-    ], dtype=np.float32)
+        cv2.rectangle(annotated, (int(x1), int(y1)), (int(x2), int(y2)), (200, 0, 0), 2) #bbox
+        cv2.circle(annotated, (int(obj_cx), int(obj_cy)), 4, (0, 0, 255), -1) # tâm object (đỏ)
+        cv2.line(annotated, (int(cam_cx), int(cam_cy)), (int(obj_cx), int(obj_cy)), (0, 255, 255),2) # line nối 2 tâm (vàng)
 
-    kf.transitionMatrix = np.array([
-        [1, 0, 1, 0],
-        [0, 1, 0, 1],
-        [0, 0, 1, 0],
-        [0, 0, 0, 1]
-    ], dtype=np.float32)
+        # text dx/dy + conf
+        cv2.putText(annotated, f"dx={dx:.1f}px dy={dy:.1f}px", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+        cv2.putText(annotated, f"conf={best_conf:.2f}", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
 
-    kf.processNoiseCov = np.eye(4, dtype=np.float32) * 1e-2
-    kf.measurementNoiseCov = np.eye(2, dtype=np.float32) * 1e-1
+    if out is not None:
+        out.write(annotated)
+    return dx,dy,best_conf
 
-    kf.statePost = np.zeros((4, 1), dtype=np.float32)
-    kf.errorCovPost = np.eye(4, dtype=np.float32)
-
-    first_measurement = True
-
-    while True:
-        if stop_event is not None and stop_event.is_set():
-            break
-
-        ok, frame = cap.read()
-        if not ok:
-            continue
-
-        h, w = frame.shape[:2]
-        cam_cx, cam_cy = w // 2, h // 2
-
-        cv2.drawMarker(frame, (cam_cx, cam_cy), CAM_CENTER_COLOR, markerType=cv2.MARKER_CROSS, markerSize=20, thickness=2)
-
-        cx = cy = conf = None
-        dx_raw = dy_raw = None
-
-        r = model(frame, verbose=False)[0]
-        b = r.boxes
-
-        if b is not None and len(b):
-            i = b.conf.argmax().item()
-            conf = float(b.conf[i].item())
-            x, y, bw, bh = b.xywh[i].tolist()
-
-            cx, cy = int(x), int(y)
-            bw, bh = int(bw), int(bh)
-
-            x1, y1 = cx - bw // 2, cy - bh // 2
-            x2, y2 = cx + bw // 2, cy + bh // 2
-
-            cv2.rectangle(frame, (x1, y1), (x2, y2), BOX_COLOR, 2)
-            cv2.circle(frame, (cx, cy), 4, CENTER_COLOR, -1)
-
-            dx_raw = cx - cam_cx
-            dy_raw = cy - cam_cy
-
-            if first_measurement:
-                kf.statePost = np.array([[dx_raw], [dy_raw], [0.0], [0.0]], dtype=np.float32)
-                first_measurement = False
-
-            kf.predict()
-
-            meas = np.array([[dx_raw], [dy_raw]], dtype=np.float32)
-            kf.correct(meas)
-
-        else:
-            if not first_measurement:
-                kf.predict()
-
-        if first_measurement:
-            dx, dy = None, None
-        else:
-            state = kf.statePost 
-            dx = round(float(state[0, 0]))  
-            dy = round(float(state[1, 0]))  
-
-        if cx is not None and dy is not None:
-            cv2.line(frame, (cam_cx, cam_cy), (cx, cy), LINE_COLOR, 2)
-
-        if dx is not None:
-            cv2.putText(frame, f"dx={dx:.1f}px dy={dy:.1f}px", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, BOX_COLOR, 2)
-
-        if conf is not None and b is not None and len(b):
-            cv2.putText(frame, f"conf={conf:.2f}", (x1, max(0, y1 - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, BOX_COLOR, 2)
-
-        if show:
-            cv2.imshow("YOLO Detect", frame)
-            if cv2.waitKey(2) & 0xFF == 27:
-                break
-
-        yield cx, cy, conf, dx, dy
-
+def close():
     cap.release()
-    cv2.destroyAllWindows()
+    out.release()
+
+if __name__ == "__main__":
+    try:
+        while True:
+            dx,dy,best_conf = detect()
+    except:
+        pass
+    finally:
+        close()
