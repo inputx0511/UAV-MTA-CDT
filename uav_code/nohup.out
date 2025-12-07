@@ -1,0 +1,12 @@
+  File "main.py", line 30
+    whiel time.time() - t0 <8:
+          ^
+SyntaxError: invalid syntax
+  File "main.py", line 30
+    whiel time.time() - t0 <8:
+          ^
+SyntaxError: invalid syntax
+  File "main.py", line 30
+    whiel time.time() - t0 <8:
+          ^
+SyntaxError: invalid syntax
