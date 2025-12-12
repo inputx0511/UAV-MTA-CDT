@@ -8,6 +8,9 @@ cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
 cap.set(cv2.CAP_PROP_FPS, 30)
+if not cap.isOpened():
+    raise RuntimeError("Cannot open camera 0")
+
 video_name = time.strftime("videos/%Y_%m_%d_%H_%M.mp4")
 out = cv2.VideoWriter(video_name,cv2.VideoWriter_fourcc(*"mp4v"),16.0,(640, 360))
 
@@ -63,9 +66,8 @@ def detect():
         cv2.putText(annotated, f"dx={dyc:.1f}px dy={dxc:.1f}px", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
         cv2.putText(annotated, f"conf={best_conf:.2f}", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
 
-    if out is not None:
-        out.write(annotated)
-    return dyc,dxc,best_conf
+    out.write(annotated)
+    return dyc, dxc, best_conf
 
 def close():
     cap.release()
