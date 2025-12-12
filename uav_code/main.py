@@ -1,51 +1,61 @@
 #!/usr/bin/env python3
 from pymavlink import mavutil
-import os
-from ultralytics import YOLO
 import time
 import detect
-import log
-import flight_control as fc
+from state import state
+from flight_controller import FlightController
 
 def connect(port="/dev/ttyUSB0", baud=57600):
-    f = log.log_file()
+    filename = time.strftime("logs/%Y_%m_%d_%H_%M.csv")
+    f = open(filename, "w")
     f.write(f"Connecting to {port} @ {baud}...")
     m = mavutil.mavlink_connection(port, baud=baud)
     m.wait_heartbeat()
     f.write(f"HEARTBEAT received: {m.target_system}, {m.target_component}")
-    return m,f
+    return m, f
 
-def wait_to_takeoff(m,f):
-    log.request_message(m,65)
-    log.request_message(m,33)
+def wait_to_takeoff():
+    st.start_stream()
     while True:
-        ch6, _ = log.stream_data(m,f)
+        snap = st.poll()
+        if snap is not None:
+            t_ms, ch6, alt, roll, pitch, yaw = snap
+            if ch6 == 2000:
+                break
         time.sleep(0.05)
-        if ch6 == 2000:
-            break
 
-def takeoff(m,f):
-    fc.set_mode_guided(m,f)
-    fc.arm(m,f)
+def takeoff():
+    fc.arm()
     time.sleep(1.5)
-    fc.takeoff(m, f, 2.5) #cất cánh lên 2.5m
+    fc.takeoff(4) #cất cánh lên 4m
 
 if __name__ =="__main__":
     try:
-        m,f = connect()
-        wait_to_takeoff(m,f)
-        takeoff(m,f)
+        m, f = connect()
+        st = state(m, f)
+        fc = FlightController(m, f)
+        fc.set_mode_guided()
+        wait_to_takeoff()
+        takeoff()
+        reached_alt = False
         t0 = time.time()
-        while time.time() - t0 < 20:
-            _, alt_m = log.stream_data(m,f)
-            if time.time() - t0 > 5:
-                fc.send_body_velocity(m,0,0,0)
-            time.sleep(0.05)
+        while time.time() - t0 < 30:
+            detect.detect()
+            snap = st.poll()
+            if snap is not None:
+                t_ms, ch6, alt, roll, pitch, yaw = snap
+                if not reached_alt and alt >= 4:
+                    reached_alt = True
 
-        fc.land(m,f)
+            if reached_alt:
+                fc.send_body_velocity(0,0,0)
+
+        fc.land()
         
-    except:
-        pass
+    except Exception as e:
+        f.write(f"Lỗi xảy ra: {e}")
     finally:
-        fc.land(m,f)
-        log.stop_stream(m,f)
+        fc.land()
+        st.stop_stream
+        detect.close()
+        m.close()
