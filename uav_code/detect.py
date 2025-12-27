@@ -3,6 +3,7 @@ from ultralytics import YOLO
 import time
 import socket
 import json
+import numpy as np
 
 # ================= Socket config =================
 UDP_IP = "127.0.0.1"
@@ -17,22 +18,32 @@ def send_udp(pkt: dict):
     sock.sendto(json.dumps(pkt).encode("utf-8"), main_addr)
 
 def recv_udp():
-    try:
-        data, _ = sock.recvfrom(256)
-    except BlockingIOError:
-        return False
-    except OSError:
-        return False
+    if not hasattr(recv_udp, "mode"):
+        recv_udp.mode = "Idle"
+        recv_udp.altitude = 0.0
 
     try:
-        msg = json.loads(data.decode("utf-8"))
-    except Exception:
-        return False
+        msg = json.loads(sock.recvfrom(256)[0].decode("utf-8"))
+    except (BlockingIOError, OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return recv_udp.mode, recv_udp.altitude
 
-    return (msg.get("type") == "cmd" and msg.get("cmd") == "stop")   
+    t = msg.get("type")
+
+    if t == "mode":
+        m = msg.get("mode")
+        if m in ("Take off", "Following", "Landing", "Stop"):
+            recv_udp.mode = m
+
+    elif t == "altitude":
+        try:
+            recv_udp.altitude = float(msg.get("altitude"))
+        except (TypeError, ValueError):
+            pass
+
+    return recv_udp.mode, recv_udp.altitude
 
 # ================= Model / Camera =================
-model = YOLO("models/best.pt")
+model = YOLO("models/detect_v1.pt")
 cap = cv2.VideoCapture(0)
 cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
@@ -42,9 +53,14 @@ if not cap.isOpened():
     raise RuntimeError("Cannot open camera")
 
 video_name = time.strftime("videos/%Y_%m_%d_%H_%M.mp4")
-out = cv2.VideoWriter(video_name, cv2.VideoWriter_fourcc(*"mp4v"), 20.0, (640, 480))
+out = cv2.VideoWriter(video_name, cv2.VideoWriter_fourcc(*"mp4v"), 16.0, (480, 640))
 
-def detect() -> dict:
+dummy = np.zeros((480, 640, 3), dtype=np.uint8)
+_ = model.predict(dummy,conf=0.4,imgsz=320,device="cuda",half=True,verbose=False)
+msg = {"seq": -1,"found": False,"dx": 0,"dy": 0, "dxp": 0, "dyp": 0, "conf": 0}
+send_udp(msg)
+
+def detect(mode_text, dz) -> dict:
     if not hasattr(detect, "frame_id"):
         detect.frame_id = 0
         detect.prev_t = 0.0
@@ -63,14 +79,16 @@ def detect() -> dict:
             "found": False,
             "dx": 0.0,
             "dy": 0.0,
+            "dxp": 0,
+            "dyp": 0,
             "conf": 0.0,
         }
         return pkt
-
+    frame = cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
     H, W = frame.shape[0], frame.shape[1]
     cam_cx, cam_cy = W / 2.0, H / 2.0
 
-    r = model.predict(frame, conf=0.5, imgsz=320, device="cuda", half=True, verbose=False)[0]
+    r = model.predict(frame, conf=0.4, imgsz=320, device="cuda", half=True, verbose=False)[0]
     b = r.boxes
 
     found = False
@@ -83,12 +101,15 @@ def detect() -> dict:
         obj_cx = (x1 + x2) / 2.0
         obj_cy = (y1 + y2) / 2.0
 
-        dxc = obj_cx - cam_cx
-        dyc = cam_cy - obj_cy
+        dyc = obj_cx - cam_cx
+        dxc = cam_cy - obj_cy
     else:
         best_conf = 0.0
         dxc = 0.0
         dyc = 0.0
+    #Tính độ lệch theo m
+    dx = dz*dxc/444
+    dy = dz*dyc/444
 
     # Tính fps
     detect.frame_id += 1
@@ -101,8 +122,10 @@ def detect() -> dict:
 
     # Vẽ chú thích
     annotated = frame
-    cv2.putText(annotated, f"FPS:{detect.fps_now}", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+    cv2.putText(annotated, f"FPS:{detect.fps_now}", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 2)
     cv2.drawMarker(annotated, (int(cam_cx), int(cam_cy)), (0, 255, 255), markerType=cv2.MARKER_CROSS, markerSize=20, thickness=2)
+    cv2.putText(annotated,f"Mode: {mode_text}",(10, 630),cv2.FONT_HERSHEY_SIMPLEX,0.8,(0, 0, 0),2)
+    cv2.putText(annotated,f"dz: {dz}",(10, 600),cv2.FONT_HERSHEY_SIMPLEX,0.8,(0, 0, 0),2)
 
     if bbox is not None:
         x1, y1, x2, y2 = bbox
@@ -110,16 +133,18 @@ def detect() -> dict:
         cv2.circle(annotated, (int(obj_cx), int(obj_cy)), 4, (0, 0, 255), -1)
         cv2.line(annotated, (int(cam_cx), int(cam_cy)), (int(obj_cx), int(obj_cy)), (0, 255, 255), 2)
 
-        cv2.putText(annotated, f"dx={dyc:.1f}px dy={dxc:.1f}px", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
-        cv2.putText(annotated, f"conf={best_conf:.2f}", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+        cv2.putText(annotated, f"dx={dx:.3f}m dy={dy:.3f}m", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 2)
+        cv2.putText(annotated, f"conf={best_conf:.2f}", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 2)
 
     out.write(annotated)
 
     pkt = {
         "seq": detect.seq,
         "found": found,
-        "dx": float(dyc),
-        "dy": float(dxc),
+        "dx": float(dx),
+        "dy": float(dy),
+        "dxp": int(dxc),
+        "dyp": int(dyc),
         "conf": round(float(best_conf),2),
     }
     detect.seq += 1
@@ -132,11 +157,17 @@ def close():
 
 if __name__ == "__main__":
     try:
-        _stop = False
-        while not _stop:
-            pkt = detect()
+        while True:
+            mode, dz = recv_udp()
+            if mode == "Stop":
+                break
+            elif  mode == "Idle":
+                time.sleep(0.02)
+                continue
+
+            pkt = detect(mode, dz)
             send_udp(pkt)
-            _stop = recv_udp()
+
     except: 
         pass
     finally:

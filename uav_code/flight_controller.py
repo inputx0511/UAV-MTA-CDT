@@ -25,6 +25,11 @@ class PID:
             d = (error - self.prev_error) / dt if self.has_prev else 0.0
 
         self.integral += error * dt
+        if self.integral > 0.15:
+            self.integral = 0.15
+        elif self.integral < -0.15:
+            self.integral = -0.15
+
         u = self.kp * error + self.ki * self.integral + self.kd * d
 
         if self.out_min is not None:
@@ -43,10 +48,10 @@ class FlightController:
         self.log_file = f
 
         # PID cho tracking
-        self.pid_x = PID(kp=0.005, ki=0.001, kd=0.001,
-                         out_min=-0.5, out_max=0.5)
-        self.pid_y = PID(kp=0.002, ki=0.0005, kd=0.005,
-                         out_min=-0.5, out_max=0.5)
+        self.pid_x = PID(kp=0.4, ki=0.0, kd=0.0, #0.5
+                         out_min=-1.5, out_max=1.5)
+        self.pid_y = PID(kp=0.2, ki=0.0, kd=0.0, #0.3
+                         out_min=-1.0, out_max=1.0)
         self.pid_z = PID(kp=0.1, ki=0.0, kd=0.02,
                          out_min=-0.4, out_max=0.4)
 
@@ -134,8 +139,8 @@ class FlightController:
             mavutil.mavlink.POSITION_TARGET_TYPEMASK_AY_IGNORE |
             mavutil.mavlink.POSITION_TARGET_TYPEMASK_AZ_IGNORE |
 
-            mavutil.mavlink.POSITION_TARGET_TYPEMASK_YAW_IGNORE
-            # mavutil.mavlink.POSITION_TARGET_TYPEMASK_YAW_RATE_IGNORE
+            # mavutil.mavlink.POSITION_TARGET_TYPEMASK_YAW_IGNORE |
+            mavutil.mavlink.POSITION_TARGET_TYPEMASK_YAW_RATE_IGNORE
         )
 
         ts = int(time.time() * 1000) & 0xFFFFFFFF
@@ -145,17 +150,38 @@ class FlightController:
             self.m.target_component,
             mavutil.mavlink.MAV_FRAME_BODY_NED,
             type_mask,
-            0, 0, 0,          
-            vx, vy, vz,       
-            0, 0, 0,          
-            0, 0              
+            0, 0, 0,
+            vx, vy, vz,
+            0, 0, 0,
+            0, 0
         )
 
-    def tracking(self, dx, dy, dz, dt):
+    def heading_hold(self):
+        self.m.mav.command_long_send(
+            self.m.target_system,
+            self.m.target_component,
+            mavutil.mavlink.MAV_CMD_CONDITION_YAW,
+            0,
+            0,
+            15,
+            1,
+            1,
+            0, 0, 0
+        )
+
+    def velocity_z(self, dxp, dyp, dz, found, xmax = 320.0, ymax=240.0):
+        if dz != 0 and found:
+            s = (dxp/xmax)*(dxp/xmax) + (dyp/ymax)*(dyp/ymax)
+            alpha =  0.0 if s >= 1.0 else (1.0 - s)*(1.0 - s)
+            K = 0.04 #0.05
+            return K*alpha*dz
+        else:
+            return 0 #chỉnh cho z mượt khi không detect được
+    
+    def pid_commute(self, dx, dy, dxp, dyp, dz, dt, found):
         vx = self.pid_x.commute(dx, dt)
         vy = self.pid_y.commute(dy, dt)
+        vz = self.velocity_z(dxp, dyp, dz, found)
+        # print(f"{dx}, {vx}, {dy}, {vy}, {dz}, {vz}")
+        return vx,vy,vz
 
-        alpha = abs((180 - dx) / 360) + abs((320 - dy) / 640)
-        vz = alpha * self.pid_z.commute(dz, dt)
-
-        self.send_body_velocity(vx, vy, vz)

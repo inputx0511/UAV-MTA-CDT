@@ -25,7 +25,7 @@ class state:
         self._log_file = f
         self._log_file.write("t_ms,ch6,alt,roll,pitch,yaw\n")
 
-    def _set_message_interval(self, msg_id, hz = 5):
+    def _set_message_interval(self, msg_id, hz = 10):
         if hz <= 0:
             interval_us = 0
         else:

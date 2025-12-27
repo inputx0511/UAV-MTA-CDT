@@ -1,2 +1,4 @@
 pgrep -af "main|detect"
 pkill -f "main|detect"
+sudo swapoff -a
+sudo swapon -a
