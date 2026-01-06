@@ -52,9 +52,6 @@ class FlightController:
                          out_min=-1.5, out_max=1.5)
         self.pid_y = PID(kp=0.2, ki=0.0, kd=0.0, #0.3
                          out_min=-1.0, out_max=1.0)
-        self.pid_z = PID(kp=0.1, ki=0.0, kd=0.02,
-                         out_min=-0.4, out_max=0.4)
-
     def _log(self, msg):
         self.log_file.write(msg + "\n")
 
@@ -156,20 +153,8 @@ class FlightController:
             0, 0
         )
 
-    def heading_hold(self):
-        self.m.mav.command_long_send(
-            self.m.target_system,
-            self.m.target_component,
-            mavutil.mavlink.MAV_CMD_CONDITION_YAW,
-            0,
-            0,
-            15,
-            1,
-            1,
-            0, 0, 0
-        )
-
     def velocity_z(self, dxp, dyp, dz, found, xmax = 320.0, ymax=240.0):
+        if dz < 2: dz = 2
         if dz != 0 and found:
             s = (dxp/xmax)*(dxp/xmax) + (dyp/ymax)*(dyp/ymax)
             alpha =  0.0 if s >= 1.0 else (1.0 - s)*(1.0 - s)
@@ -178,10 +163,12 @@ class FlightController:
         else:
             return 0 #chỉnh cho z mượt khi không detect được
     
-    def pid_commute(self, dx, dy, dxp, dyp, dz, dt, found):
-        vx = self.pid_x.commute(dx, dt)
-        vy = self.pid_y.commute(dy, dt)
-        vz = self.velocity_z(dxp, dyp, dz, found)
-        # print(f"{dx}, {vx}, {dy}, {vy}, {dz}, {vz}")
+    def pid_commute(self, dx, dy, dz, dt, found):
+        dxm = dz*dx/444 #Sai lệch theo m
+        dym = dz*dy/444
+        vx = self.pid_x.commute(dxm, dt)
+        vy = self.pid_y.commute(dym, dt)
+        vz = self.velocity_z(dxm, dym, dz, found)
+        print(f"{dxm}, {vx}, {dym}, {vy}, {dz}, {vz}")
         return vx,vy,vz
 
