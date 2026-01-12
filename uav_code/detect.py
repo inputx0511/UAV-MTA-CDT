@@ -31,7 +31,7 @@ def recv_udp():
 
     if t == "mode":
         m = msg.get("mode")
-        if m in ("Take off", "Following", "Landing", "Stop"):
+        if m in ("Take off", "Following", "Landing", "Stop", "Landing 0.7"):
             recv_udp.mode = m
 
     elif t == "altitude":
@@ -57,10 +57,10 @@ out = cv2.VideoWriter(video_name, cv2.VideoWriter_fourcc(*"mp4v"), 16.0, (480, 6
 
 dummy = np.zeros((480, 640, 3), dtype=np.uint8)
 _ = model.predict(dummy,conf=0.4,imgsz=320,device="cuda",half=True,verbose=False)
-msg = {"seq": -1,"found": False,"dx": 0,"dy": 0, "dxp": 0, "dyp": 0, "conf": 0}
+msg = {"seq": -1,"found": False,"dx": 0,"dy": 0, "conf": 0}
 send_udp(msg)
 
-def detect(mode_text, dz) -> dict:
+def detect(mode_text) -> dict:
     if not hasattr(detect, "frame_id"):
         detect.frame_id = 0
         detect.prev_t = 0.0
@@ -79,8 +79,6 @@ def detect(mode_text, dz) -> dict:
             "found": False,
             "dx": 0.0,
             "dy": 0.0,
-            "dxp": 0,
-            "dyp": 0,
             "conf": 0.0,
         }
         return pkt
@@ -107,9 +105,9 @@ def detect(mode_text, dz) -> dict:
         best_conf = 0.0
         dxc = 0.0
         dyc = 0.0
-    #Tính độ lệch theo m
-    dx = dz*dxc/444
-    dy = dz*dyc/444
+    # #Tính độ lệch theo m
+    # dx = dz*dxc/444
+    # dy = dz*dyc/444
 
     # Tính fps
     detect.frame_id += 1
@@ -125,7 +123,8 @@ def detect(mode_text, dz) -> dict:
     cv2.putText(annotated, f"FPS:{detect.fps_now}", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 2)
     cv2.drawMarker(annotated, (int(cam_cx), int(cam_cy)), (0, 255, 255), markerType=cv2.MARKER_CROSS, markerSize=20, thickness=2)
     cv2.putText(annotated,f"Mode: {mode_text}",(10, 630),cv2.FONT_HERSHEY_SIMPLEX,0.8,(0, 0, 0),2)
-    cv2.putText(annotated,f"dz: {dz}",(10, 600),cv2.FONT_HERSHEY_SIMPLEX,0.8,(0, 0, 0),2)
+    cv2.putText(annotated,f"Time: {time.time():.1f}",(10, 580),cv2.FONT_HERSHEY_SIMPLEX,0.8,(0, 0, 0),2)
+    # cv2.putText(annotated,f"dz: {dz}",(10, 600),cv2.FONT_HERSHEY_SIMPLEX,0.8,(0, 0, 0),2)
 
     if bbox is not None:
         x1, y1, x2, y2 = bbox
@@ -133,7 +132,7 @@ def detect(mode_text, dz) -> dict:
         cv2.circle(annotated, (int(obj_cx), int(obj_cy)), 4, (0, 0, 255), -1)
         cv2.line(annotated, (int(cam_cx), int(cam_cy)), (int(obj_cx), int(obj_cy)), (0, 255, 255), 2)
 
-        cv2.putText(annotated, f"dx={dx:.3f}m dy={dy:.3f}m", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 2)
+        cv2.putText(annotated, f"dx={dxc:.1f}p dy={dyc:.1f}p", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 2)
         cv2.putText(annotated, f"conf={best_conf:.2f}", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 2)
 
     out.write(annotated)
@@ -141,10 +140,8 @@ def detect(mode_text, dz) -> dict:
     pkt = {
         "seq": detect.seq,
         "found": found,
-        "dx": float(dx),
-        "dy": float(dy),
-        "dxp": int(dxc),
-        "dyp": int(dyc),
+        "dx": float(dxc),
+        "dy": float(dyc),
         "conf": round(float(best_conf),2),
     }
     detect.seq += 1
@@ -165,7 +162,8 @@ if __name__ == "__main__":
                 time.sleep(0.02)
                 continue
 
-            pkt = detect(mode, dz)
+            # pkt = detect(mode, dz)
+            pkt = detect(mode)
             send_udp(pkt)
 
     except: 
