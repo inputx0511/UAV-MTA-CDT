@@ -60,7 +60,7 @@ _ = model.predict(dummy,conf=0.4,imgsz=320,device="cuda",half=True,verbose=False
 msg = {"seq": -1,"found": False,"dx": 0,"dy": 0, "conf": 0}
 send_udp(msg)
 
-def detect(mode_text) -> dict:
+def detect(mode_text, dz) -> dict:
     if not hasattr(detect, "frame_id"):
         detect.frame_id = 0
         detect.prev_t = 0.0
@@ -124,7 +124,7 @@ def detect(mode_text) -> dict:
     cv2.drawMarker(annotated, (int(cam_cx), int(cam_cy)), (0, 255, 255), markerType=cv2.MARKER_CROSS, markerSize=20, thickness=2)
     cv2.putText(annotated,f"Mode: {mode_text}",(10, 630),cv2.FONT_HERSHEY_SIMPLEX,0.8,(0, 0, 0),2)
     cv2.putText(annotated,f"Time: {time.time():.1f}",(10, 580),cv2.FONT_HERSHEY_SIMPLEX,0.8,(0, 0, 0),2)
-    # cv2.putText(annotated,f"dz: {dz}",(10, 600),cv2.FONT_HERSHEY_SIMPLEX,0.8,(0, 0, 0),2)
+    cv2.putText(annotated,f"dz: {dz}",(10, 600),cv2.FONT_HERSHEY_SIMPLEX,0.8,(0, 0, 0),2)
 
     if bbox is not None:
         x1, y1, x2, y2 = bbox
@@ -162,8 +162,8 @@ if __name__ == "__main__":
                 time.sleep(0.02)
                 continue
 
-            # pkt = detect(mode, dz)
-            pkt = detect(mode)
+            pkt = detect(mode, dz)
+            # pkt = detect(mode)
             send_udp(pkt)
 
     except: 

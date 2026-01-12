@@ -49,10 +49,10 @@ class FlightController:
         self.dxm_old = 0.0
         self.dym_old = 0.0
         # PID cho tracking
-        self.pid_x = PID(kp=0.4, ki=0.0, kd=0.0, #0.5
-                         out_min=-1.5, out_max=1.5)
-        self.pid_y = PID(kp=0.2, ki=0.0, kd=0.0, #0.3
-                         out_min=-1.0, out_max=1.0)
+        self.pid_x = PID(kp=50, ki=0.0, kd=0.0,
+                         out_min=-250.0, out_max=250.0)
+        self.pid_y = PID(kp=50, ki=0.0, kd=0.0,
+                         out_min=-250.0, out_max=250.0)
     def _log(self, msg):
         self.log_file.write(msg + "\n")
 
@@ -179,12 +179,41 @@ class FlightController:
             0, 0
         )
 
-    def velocity_z(self, dxp, dyp, dz, found, xmax = 320.0, ymax=240.0):
+    def send_manual_stick(self, pitch, roll, throttle):
+        """
+        Gửi trực tiếp stick MANUAL_CONTROL.
+        Giới hạn biên ±25% (±250).
+        pitch, roll, yaw: [-1000, 1000]
+        throttle: [0, 1000], 500 ~ hover
+        """
+
+        STICK_MAX = 250  # 25% của 1000
+
+        # Chặn biên pitch, roll, yaw
+        pitch = max(min(int(pitch), STICK_MAX), -STICK_MAX)
+        roll  = max(min(int(roll),  STICK_MAX), -STICK_MAX)
+        yaw   = max(min(int(yaw),   STICK_MAX), -STICK_MAX)
+
+        # Chặn biên throttle quanh 500
+        throttle = max(min(int(throttle), 500 + STICK_MAX), 500 - STICK_MAX)
+
+        # Gửi MAVLink MANUAL_CONTROL
+        self.m.mav.manual_control_send(
+            self.m.target_system,
+            pitch,      # x: pitch
+            roll,       # y: roll
+            throttle,   # z: throttle
+            32767,      # ignore yaw
+            0
+        )
+
+
+    def throttle(self, dxp, dyp, dz, found, xmax = 320.0, ymax=240.0):
         if dz != 0 and found:
             s = (dxp/xmax)*(dxp/xmax) + (dyp/ymax)*(dyp/ymax)
             alpha =  0.0 if s >= 1.0 else (1.0 - s)*(1.0 - s)
-            if dz < 1: K = 0.06
-            else: K = 0.04
+            if dz < 1: K = 70
+            else: K = 50
             return K*alpha*dz
         else:
             return 0 #chỉnh cho z mượt khi không detect được
@@ -202,13 +231,11 @@ class FlightController:
             dxm = self.dxm_old
             dym = self.dym_old
             
-        # dxm = dz*dx/444 #Sai lệch theo m
-        # dym = dz*dy/444
         if dz < 1.2: i = 2
         else: i = 1
-        vx = self.pid_x.commute(dxm, dt, i)
-        vy = self.pid_y.commute(dym, dt, i)
-        vz = self.velocity_z(dxm, dym, dz, found,i)
-        print(f"time: {time.time():.1f}, dx: {dxm}:.3f, vx:{vx}:.3f, dy:{dym}:.3f, vy:{vy}:.3f, dz:{dz}:.3f, vz:{vz}:.3f")
-        return vx,vy,vz
+        pitch = -self.pid_x.commute(dxm, dt, i) #đảo dấu
+        roll = self.pid_y.commute(dym, dt, i)
+        throttle = self.throttle(dxm, dym, dz, found)
+        # print(f"time: {time.time():.1f}, dx: {dxm}:.3f, vx:{vx}:.3f, dy:{dym}:.3f, vy:{vy}:.3f, dz:{dz}:.3f, vz:{vz}:.3f")
+        return pitch,roll,throttle
 
